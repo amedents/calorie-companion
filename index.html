@@ -371,7 +371,8 @@
   }
 
   function addWeight(){
-    const v=parseFloat(document.getElementById("weightVal").value);
+    const raw=(document.getElementById("weightVal").value||"").replace(",",".").trim();
+    const v=parseFloat(raw); // accept comma decimal (locale keypads) and dot alike
     if(!(v>0)) return;
     const t=todayStr();
     state.weights = state.weights.filter(w=>w.date!==t); // one per day
