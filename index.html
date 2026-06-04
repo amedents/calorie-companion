@@ -208,7 +208,7 @@
       return Object.assign(structuredClone(DEFAULT), p);
     }catch(e){ return structuredClone(DEFAULT); }
   }
-  function save(){ localStorage.setItem(LS_KEY, JSON.stringify(state)); }
+  function save(){ try{ localStorage.setItem(LS_KEY, JSON.stringify(state)); }catch(e){ /* storage blocked (iOS Private Browsing / sandbox) — keep working in-memory so the UI still updates */ } }
 
   function todayStr(){ return dateStr(new Date()); }
   function dateStr(d){
