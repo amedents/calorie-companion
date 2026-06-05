@@ -10,6 +10,7 @@
 <meta name="theme-color" content="#0f1117" />
 <link rel="apple-touch-icon" sizes="180x180" href="icon-180.png" />
 <link rel="icon" type="image/png" sizes="512x512" href="icon-512.png" />
+<link rel="manifest" href="manifest.webmanifest" />
 <title>Calorie & Weight Companion</title>
 <style>
   :root{
@@ -31,7 +32,7 @@
   .sub{color:var(--muted);font-size:13px}
   .grid{display:grid;grid-template-columns:1fr 1fr;gap:16px}
   @media(max-width:760px){.grid{grid-template-columns:1fr}body{padding:14px}}
-  .card{background:var(--panel);border:1px solid var(--line);border-radius:var(--radius);padding:18px;box-shadow:var(--shadow)}
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:var(--radius);padding:18px;box-shadow:var(--shadow);min-width:0}
   .card h2{font-size:14px;text-transform:uppercase;letter-spacing:.8px;color:var(--muted);margin:0 0 14px}
   .daynav{display:flex;align-items:center;gap:10px;margin-bottom:14px}
   .daynav button{background:var(--panel2)}
@@ -57,9 +58,10 @@
   .addrow{display:grid;grid-template-columns:1fr 90px auto;gap:8px;margin-bottom:12px}
   .addrow.weight{grid-template-columns:1fr auto}
   .chips{display:flex;flex-wrap:wrap;gap:6px;margin-bottom:12px}
-  .chip{background:var(--panel2);border:1px solid var(--line);color:var(--txt);border-radius:999px;padding:6px 11px;font-size:12.5px;font-weight:500}
+  .chip{display:inline-flex;align-items:baseline;gap:5px;max-width:100%;background:var(--panel2);border:1px solid var(--line);color:var(--txt);border-radius:999px;padding:6px 11px;font-size:12.5px;font-weight:500}
   .chip:hover{border-color:var(--accent)}
-  .chip .kcal{color:var(--muted);font-weight:400}
+  .chip .nm{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0}
+  .chip .kcal{color:var(--muted);font-weight:400;flex:0 0 auto}
   ul.list{list-style:none;margin:0;padding:0;max-height:230px;overflow:auto}
   ul.list li{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:9px 4px;border-bottom:1px solid var(--line)}
   ul.list li:last-child{border-bottom:none}
@@ -102,9 +104,9 @@
     <div class="card">
       <h2>Daily Calories</h2>
       <div class="daynav">
-        <button class="ghost" id="prevDay">‹</button>
+        <button class="ghost" id="prevDay" aria-label="Previous day">‹</button>
         <div class="dlabel" id="dayLabel">Today</div>
-        <button class="ghost" id="nextDay">›</button>
+        <button class="ghost" id="nextDay" aria-label="Next day">›</button>
       </div>
 
       <div class="ringwrap">
@@ -266,7 +268,12 @@
     state.quick.slice(0,8).forEach(q=>{
       const b=document.createElement("button");
       b.className="chip";
-      b.innerHTML = q.name+' <span class="kcal">'+q.kcal+'</span>';
+      // Build with text nodes — food names are user input and must never be
+      // treated as markup (e.g. a name like "<img onerror=...>"). The name
+      // ellipsizes so a long unbroken name can't force horizontal scroll.
+      const nm=document.createElement("span"); nm.className="nm"; nm.textContent=q.name;
+      const kc=document.createElement("span"); kc.className="kcal"; kc.textContent=q.kcal;
+      b.appendChild(nm); b.appendChild(kc);
       b.onclick=()=>{ addEntry(q.name, q.kcal); };
       box.appendChild(b);
     });
@@ -282,6 +289,7 @@
       const nm=document.createElement("span"); nm.className="fname"; nm.textContent=e.name;
       const kc=document.createElement("span"); kc.className="fkcal"; kc.textContent=e.kcal+" kcal";
       const del=document.createElement("button"); del.className="del"; del.textContent="✕";
+      del.setAttribute("aria-label","Remove "+e.name);
       del.onclick=()=>{ items.splice(i,1); if(items.length===0) delete state.days[viewDate]; save(); render(); };
       li.appendChild(nm); li.appendChild(kc); li.appendChild(del);
       ul.appendChild(li);
@@ -393,14 +401,63 @@
   function exportData(){
     download("calorie-companion-backup-"+todayStr()+".json", JSON.stringify(state,null,2));
   }
-  function mergeState(incoming){
+  // Imported files are untrusted (hand-edited / wrong file / corrupt). Coerce
+  // them into a clean, well-typed state so bad data can never reach the UI
+  // (e.g. a weight without a number used to push NaN into the SVG chart).
+  function toNum(v){ const n = typeof v==="number" ? v : parseFloat(v); return Number.isFinite(n) ? n : null; }
+  const isDate = s => /^\d{4}-\d{2}-\d{2}$/.test(s);
+  function looksLikeBackup(raw){
+    return raw && typeof raw==="object" && !Array.isArray(raw) &&
+      ("target" in raw || "days" in raw || "weights" in raw || "quick" in raw);
+  }
+  function sanitize(raw){
+    const out = structuredClone(DEFAULT);
+    if(!looksLikeBackup(raw)) return out;
+    const t = toNum(raw.target); if(t!==null && t>0) out.target = Math.round(t);
+    if(raw.days && typeof raw.days==="object" && !Array.isArray(raw.days)){
+      Object.keys(raw.days).forEach(d=>{
+        if(!isDate(d) || !Array.isArray(raw.days[d])) return;
+        const clean = raw.days[d]
+          .map(e=>({ name:String((e&&e.name)||"").trim(), kcal:toNum(e&&e.kcal) }))
+          .filter(e=>e.name && e.kcal!==null && e.kcal>=0)
+          .map(e=>({ name:e.name, kcal:Math.round(e.kcal) }));
+        if(clean.length) out.days[d]=clean;
+      });
+    }
+    if(Array.isArray(raw.weights)){
+      out.weights = raw.weights
+        .map(w=>({ date:String((w&&w.date)||""), kg:toNum(w&&w.kg) }))
+        .filter(w=>isDate(w.date) && w.kg!==null && w.kg>0)
+        .map(w=>({ date:w.date, kg:Math.round(w.kg*10)/10 }));
+    }
+    if(Array.isArray(raw.quick)){
+      const seen=new Set();
+      raw.quick.forEach(q=>{
+        const name=String((q&&q.name)||"").trim(), kcal=toNum(q&&q.kcal);
+        if(name && kcal!==null && kcal>=0 && !seen.has(name.toLowerCase())){
+          seen.add(name.toLowerCase()); out.quick.push({ name, kcal:Math.round(kcal) });
+        }
+      });
+      out.quick = out.quick.slice(0,16);
+    }
+    return out;
+  }
+  function mergeState(rawIncoming){
+    const incoming = sanitize(rawIncoming);
     const out=structuredClone(state);
-    if(incoming && typeof incoming==="object"){
+    {
       if(incoming.target>0 && state.target===DEFAULT.target) out.target=incoming.target;
       if(incoming.days){
         Object.keys(incoming.days).forEach(d=>{
           const inc=incoming.days[d]||[], cur=out.days[d]||[];
-          out.days[d] = inc.length>cur.length ? inc : cur; // keep the more complete day
+          if(!cur.length){ out.days[d]=inc.slice(); return; }
+          // Union both devices' entries for the day. Dedupe by name+kcal so
+          // re-importing the same backup stays idempotent (no double-counting).
+          const sig=e=>String(e.name).toLowerCase()+"|"+e.kcal;
+          const have=new Set(cur.map(sig));
+          const merged=cur.slice();
+          inc.forEach(e=>{ if(!have.has(sig(e))){ merged.push(e); have.add(sig(e)); } });
+          out.days[d]=merged;
         });
       }
       if(Array.isArray(incoming.weights)){
@@ -422,8 +479,9 @@
     reader.onload=()=>{
       try{
         const data=JSON.parse(reader.result);
+        if(!looksLikeBackup(data)) throw new Error("not a backup");
         const merge=confirm("Import backup:\n\nOK = MERGE with this device's data (combine both)\nCancel = REPLACE everything on this device");
-        state = merge ? mergeState(data) : Object.assign(structuredClone(DEFAULT), data);
+        state = merge ? mergeState(data) : sanitize(data);
         save(); render();
         alert("Backup imported "+(merge?"and merged.":"(replaced)."));
       }catch(e){ alert("Couldn't read that file — is it a Companion backup?"); }
