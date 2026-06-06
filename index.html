@@ -37,6 +37,9 @@
   .daynav{display:flex;align-items:center;gap:10px;margin-bottom:14px}
   .daynav button{background:var(--panel2)}
   .daynav .dlabel{flex:1;text-align:center;font-weight:600;font-size:15px}
+  /* unified day switcher governs both calories AND weight for the viewed day */
+  .daybar{background:var(--panel);border:1px solid var(--line);border-radius:var(--radius);padding:8px 12px;margin-bottom:16px;box-shadow:var(--shadow)}
+  .daybar .dsub{display:block;text-align:center;font-size:11px;color:var(--muted);margin-top:-2px}
   /* ring */
   .ringwrap{display:flex;align-items:center;gap:18px;margin-bottom:8px}
   .ring{position:relative;width:130px;height:130px;flex:0 0 auto}
@@ -99,15 +102,20 @@
     <div class="sub" id="todayQuote"></div>
   </header>
 
+  <!-- Unified day switcher: drives BOTH the calories card and the weight log below -->
+  <div class="daynav daybar">
+    <button class="ghost" id="prevDay" aria-label="Previous day">‹</button>
+    <div class="dlabel">
+      <span id="dayLabel">Today</span>
+      <span class="dsub">applies to calories &amp; weight</span>
+    </div>
+    <button class="ghost" id="nextDay" aria-label="Next day">›</button>
+  </div>
+
   <div class="grid">
     <!-- TODAY -->
     <div class="card">
       <h2>Daily Calories</h2>
-      <div class="daynav">
-        <button class="ghost" id="prevDay" aria-label="Previous day">‹</button>
-        <div class="dlabel" id="dayLabel">Today</div>
-        <button class="ghost" id="nextDay" aria-label="Next day">›</button>
-      </div>
 
       <div class="ringwrap">
         <div class="ring">
@@ -258,8 +266,23 @@
 
     renderQuick();
     renderList();
+    renderWeightInput();
     renderWeight();
     renderStats();
+  }
+
+  // Prefill the weight field with whatever is logged for the viewed day, so
+  // navigating to a past day shows its weight and lets you edit/backfill it.
+  function renderWeightInput(){
+    const inp=document.getElementById("weightVal");
+    const existing=state.weights.find(w=>w.date===viewDate);
+    inp.value = existing ? existing.kg : "";
+    const isToday = viewDate===todayStr();
+    const isYday = viewDate===addDays(todayStr(),-1);
+    inp.placeholder = isToday ? "Today's weight (kg)"
+      : isYday ? "Yesterday's weight (kg)"
+      : "Weight on "+prettyDay(viewDate)+" (kg)";
+    document.getElementById("addWeight").textContent = existing ? "Update" : "Log";
   }
 
   function renderQuick(){
@@ -382,12 +405,12 @@
     const raw=(document.getElementById("weightVal").value||"").replace(",",".").trim();
     const v=parseFloat(raw); // accept comma decimal (locale keypads) and dot alike
     if(!(v>0)) return;
-    const t=todayStr();
-    state.weights = state.weights.filter(w=>w.date!==t); // one per day
-    state.weights.push({date:t, kg:Math.round(v*10)/10});
+    // Logs against the day the unified switcher is on (viewDate), so past days
+    // can be backfilled. One entry per day — re-logging overwrites.
+    state.weights = state.weights.filter(w=>w.date!==viewDate);
+    state.weights.push({date:viewDate, kg:Math.round(v*10)/10});
     save();
-    document.getElementById("weightVal").value="";
-    render();
+    render(); // render() re-prefills the field with the saved value (shows "Update")
   }
 
   // ---------- backup / sync ----------
