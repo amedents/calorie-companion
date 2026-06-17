@@ -79,7 +79,12 @@
   .stat .v{font-size:22px;font-weight:700}
   .stat .l{font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.6px;margin-top:3px}
   /* weight chart */
-  .chart{width:100%;height:160px;margin-top:6px}
+  .chartwrap{position:relative;touch-action:none} /* touch-action:none → horizontal finger-scrub picks days without scrolling the page */
+  .chart{width:100%;height:160px;margin-top:6px;display:block;cursor:pointer}
+  /* HTML tooltip (NOT SVG text): the chart's preserveAspectRatio="none" stretches SVG text horizontally — an HTML div stays crisp. Percentage left/top map correctly under the non-uniform scale. */
+  .charttip{position:absolute;display:none;transform:translate(-50%,calc(-100% - 9px));background:var(--panel2);border:1px solid var(--line);color:var(--txt);font-size:12px;font-weight:600;padding:5px 9px;border-radius:8px;white-space:nowrap;pointer-events:none;z-index:3;box-shadow:0 4px 14px rgba(0,0,0,.45)}
+  .charttip.below{transform:translate(-50%,9px)} /* flip under the point when it sits near the top edge */
+  .charthint{font-size:11px;color:var(--muted);text-align:center;margin-top:2px}
   .wsummary{display:flex;justify-content:space-between;font-size:13px;color:var(--muted);margin-top:6px}
   .wsummary b{color:var(--txt)}
   .target-edit{display:flex;align-items:center;gap:8px;font-size:13px;color:var(--muted);margin-top:14px}
@@ -158,7 +163,11 @@
         <input id="weightVal" placeholder="Today's weight (kg)" inputmode="decimal" />
         <button id="addWeight">Log</button>
       </div>
-      <svg class="chart" id="weightChart" preserveAspectRatio="none"></svg>
+      <div class="chartwrap" id="chartWrap">
+        <svg class="chart" id="weightChart" preserveAspectRatio="none"></svg>
+        <div class="charttip" id="chartTip"></div>
+      </div>
+      <div class="charthint" id="chartHint"></div>
       <div class="wsummary">
         <span>Start: <b id="wStart">—</b></span>
         <span>Latest: <b id="wLatest">—</b></span>
@@ -201,6 +210,9 @@
 
   let state = load();
   let viewDate = todayStr();
+  // Weight-chart hit-testing: each rendered point in viewBox coords so a tap/scrub can snap to the nearest day.
+  let weightPts = [];                 // [{x,y,date,kg}]
+  const WCHART = { W:420, H:160 };    // viewBox dims, shared by renderWeight() and the pointer handlers
 
   const quotes = [
     "Small steps, every day.",
@@ -325,8 +337,10 @@
     const W=420,H=160,pad=24;
     svg.setAttribute("viewBox","0 0 "+W+" "+H);
     svg.innerHTML="";
+    weightPts=[]; hideWeightTip();      // any prior selection is stale once the chart is rebuilt
     if(w.length===0){
       svg.innerHTML='<text x="'+(W/2)+'" y="'+(H/2)+'" fill="#9aa3b2" font-size="13" text-anchor="middle">Log your weight to see the trend</text>';
+      document.getElementById("chartHint").textContent="";
       document.getElementById("wStart").textContent="—";
       document.getElementById("wLatest").textContent="—";
       document.getElementById("wChange").textContent="—";
@@ -350,7 +364,8 @@
     darea = "M"+X(0)+" "+(H-pad)+" "+ w.map((p,i)=>"L"+X(i)+" "+Y(p.kg)).join(" ") +" L"+X(w.length-1)+" "+(H-pad)+" Z";
     svg.innerHTML+='<path d="'+darea+'" fill="rgba(91,140,255,0.12)"/>';
     svg.innerHTML+='<path d="'+dline+'" fill="none" stroke="var(--accent)" stroke-width="2.5" stroke-linejoin="round"/>';
-    w.forEach((p,i)=>{ svg.innerHTML+='<circle cx="'+X(i)+'" cy="'+Y(p.kg)+'" r="3.2" fill="var(--accent)"/>'; });
+    w.forEach((p,i)=>{ const x=X(i),y=Y(p.kg); svg.innerHTML+='<circle cx="'+x+'" cy="'+y+'" r="3.2" fill="var(--accent)"/>'; weightPts.push({x,y,date:p.date,kg:p.kg}); });
+    document.getElementById("chartHint").textContent = w.length>1 ? "Tap or drag across the chart to read each day" : "Tap the point to see its date";
 
     const start=w[0].kg, latest=w[w.length-1].kg, diff=latest-start;
     document.getElementById("wStart").textContent=start+" kg";
@@ -359,6 +374,41 @@
     const sign=diff>0?"+":"";
     ch.textContent=sign+diff.toFixed(1)+" kg";
     ch.style.color = diff<0 ? "var(--good)" : (diff>0?"var(--warn)":"var(--muted)");
+  }
+
+  // ----- weight-chart point inspection (mouse + touch + pen via Pointer Events) -----
+  const SVGNS="http://www.w3.org/2000/svg";
+  // Map a screen x to the nearest logged point. Snapping by x (not by exact hit) is what makes
+  // a 3px dot reachable on a touchscreen — the user taps anywhere along the chart's width.
+  function nearestWeightPt(clientX){
+    if(!weightPts.length) return null;
+    const r=document.getElementById("weightChart").getBoundingClientRect();
+    if(!r.width) return null;
+    const vbX=(clientX-r.left)/r.width*WCHART.W;   // CSS px -> viewBox units (x maps linearly even under preserveAspectRatio="none")
+    let best=null, bd=Infinity;
+    for(const p of weightPts){ const d=Math.abs(p.x-vbX); if(d<bd){ bd=d; best=p; } }
+    return best;
+  }
+  function showWeightTip(clientX){
+    const p=nearestWeightPt(clientX); if(!p) return;
+    const tip=document.getElementById("chartTip");
+    tip.textContent=prettyDay(p.date)+" · "+p.kg+" kg";
+    // Percentage position maps correctly despite the non-uniform SVG scale (the wrap fills the same box as the svg).
+    tip.style.left=Math.max(8,Math.min(92,p.x/WCHART.W*100))+"%"; // clamp so the centered box never overflows the card edges
+    tip.style.top=(p.y/WCHART.H*100)+"%";
+    tip.classList.toggle("below", p.y < WCHART.H*0.30);            // near the top edge → drop the tooltip below the point
+    tip.style.display="block";
+    // Highlight ring drawn in SVG: a circle's distortion under preserveAspectRatio="none" is imperceptible, unlike text.
+    const svg=document.getElementById("weightChart");
+    let hl=document.getElementById("wHL");
+    if(!hl){ hl=document.createElementNS(SVGNS,"circle"); hl.setAttribute("id","wHL");
+      hl.setAttribute("r","5.5"); hl.setAttribute("fill","none");
+      hl.setAttribute("stroke","var(--accent)"); hl.setAttribute("stroke-width","2"); svg.appendChild(hl); }
+    hl.setAttribute("cx",p.x); hl.setAttribute("cy",p.y);
+  }
+  function hideWeightTip(){
+    const tip=document.getElementById("chartTip"); if(tip) tip.style.display="none";
+    const hl=document.getElementById("wHL"); if(hl) hl.remove();
   }
 
   function renderStats(){
@@ -523,6 +573,18 @@
   document.getElementById("foodName").addEventListener("keydown",e=>{ if(e.key==="Enter") document.getElementById("foodKcal").focus(); });
   document.getElementById("addWeight").onclick=addWeight;
   document.getElementById("weightVal").addEventListener("keydown",e=>{ if(e.key==="Enter") addWeight(); });
+  // Tap/scrub the weight chart to read each day's date. Pointer Events unify mouse, touch and pen.
+  (function(){
+    const wrap=document.getElementById("chartWrap");
+    let scrub=false;
+    wrap.addEventListener("pointerdown",e=>{ scrub=true; try{ wrap.setPointerCapture(e.pointerId); }catch(_){} showWeightTip(e.clientX); e.preventDefault(); });
+    wrap.addEventListener("pointermove",e=>{ if(scrub) showWeightTip(e.clientX); });
+    const end=()=>{ scrub=false; };
+    wrap.addEventListener("pointerup",end);
+    wrap.addEventListener("pointercancel",end);
+    // Tap anywhere off the chart dismisses the readout.
+    document.addEventListener("pointerdown",e=>{ if(!wrap.contains(e.target)) hideWeightTip(); });
+  })();
   document.getElementById("prevDay").onclick=()=>{ viewDate=addDays(viewDate,-1); render(); };
   document.getElementById("nextDay").onclick=()=>{ if(viewDate<todayStr()){ viewDate=addDays(viewDate,1); render(); } };
   document.getElementById("saveTarget").onclick=()=>{
@@ -545,7 +607,7 @@
    SW can't refresh them. On resume/focus, refetch this page; if its build token changed, reload once.
    BUILD is the literal placeholder in the source (feature inert) and is stamped to a unique id at publish. */
 (function(){
-  var BUILD="__APP_BUILD__";
+  var BUILD="20260617114522";
   if(BUILD.indexOf("APP_BUILD")>-1) return;            // unstamped (local/dev) -> disabled
   var busy=false;
   function check(){
